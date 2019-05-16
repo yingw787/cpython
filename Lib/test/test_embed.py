@@ -304,6 +304,7 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
 
         'pycache_prefix': None,
         'program_name': GET_DEFAULT_CONFIG,
+        'parse_argv': 1,
         'argv': [""],
         'program': '',
 
@@ -330,6 +331,7 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
         'verbose': 0,
         'quiet': 0,
         'user_site_directory': 1,
+        'configure_c_stdio': 1,
         'buffered_stdio': 1,
 
         'stdio_encoding': GET_DEFAULT_CONFIG,
@@ -342,7 +344,8 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
 
         '_install_importlib': 1,
         'check_hash_pycs_mode': 'default',
-        '_frozen': 0,
+        'pathconfig_warnings': 1,
+        '_init_main': 1,
     }
     if MS_WINDOWS:
         DEFAULT_PRE_CONFIG.update({
@@ -370,7 +373,7 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
         ('Py_DontWriteBytecodeFlag', 'write_bytecode', True),
         ('Py_FileSystemDefaultEncodeErrors', 'filesystem_errors'),
         ('Py_FileSystemDefaultEncoding', 'filesystem_encoding'),
-        ('Py_FrozenFlag', '_frozen'),
+        ('Py_FrozenFlag', 'pathconfig_warnings', True),
         ('Py_IgnoreEnvironmentFlag', 'use_environment', True),
         ('Py_InspectFlag', 'inspect'),
         ('Py_InteractiveFlag', 'interactive'),
@@ -499,7 +502,8 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
 
         self.assertEqual(config['global_config'], expected)
 
-    def check_config(self, testname, expected_config, expected_preconfig, add_path=None):
+    def check_config(self, testname, expected_config, expected_preconfig,
+                     add_path=None, stderr=None):
         env = dict(os.environ)
         # Remove PYTHON* environment variables to get deterministic environment
         for key in list(env):
@@ -510,18 +514,21 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
         env['PYTHONCOERCECLOCALE'] = '0'
         env['PYTHONUTF8'] = '0'
 
-        out, err = self.run_embedded_interpreter(testname, env=env)
-        # Ignore err
-        try:
-            config = json.loads(out)
-        except json.JSONDecodeError:
-            self.fail(f"fail to decode stdout: {out!r}")
-
         expected_preconfig = dict(self.DEFAULT_PRE_CONFIG, **expected_preconfig)
         expected_config = self.get_expected_config(expected_config, env, add_path)
         for key in self.COPY_PRE_CONFIG:
             if key not in expected_preconfig:
                 expected_preconfig[key] = expected_config[key]
+
+        out, err = self.run_embedded_interpreter(testname, env=env)
+        if stderr is None and not expected_config['verbose']:
+            stderr = ""
+        if stderr is not None:
+            self.assertEqual(err.rstrip(), stderr)
+        try:
+            config = json.loads(out)
+        except json.JSONDecodeError:
+            self.fail(f"fail to decode stdout: {out!r}")
 
         self.check_pre_config(config, expected_preconfig)
         self.check_core_config(config, expected_config)
@@ -552,6 +559,7 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
             'filesystem_encoding': 'utf-8',
             'filesystem_errors': self.UTF8_MODE_ERRORS,
             'user_site_directory': 0,
+            'pathconfig_warnings': 0,
         }
         self.check_config("init_global_config", config, preconfig)
 
@@ -591,11 +599,13 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
             'write_bytecode': 0,
             'verbose': 1,
             'quiet': 1,
+            'configure_c_stdio': 0,
             'buffered_stdio': 0,
             'user_site_directory': 0,
             'faulthandler': 1,
 
             'check_hash_pycs_mode': 'always',
+            'pathconfig_warnings': 0,
         }
         self.check_config("init_from_config", config, preconfig)
 
@@ -688,7 +698,7 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
         self.check_config("init_read_set", core_config, preconfig,
                           add_path="init_read_set_path")
 
-    def test_run_main_config(self):
+    def test_init_run_main(self):
         preconfig = {}
         code = ('import _testinternalcapi, json; '
                 'print(json.dumps(_testinternalcapi.get_configs()))')
@@ -698,7 +708,29 @@ class InitConfigTests(EmbeddingTestsMixin, unittest.TestCase):
             'program_name': './python3',
             'run_command': code + '\n',
         }
-        self.check_config("run_main_config", core_config, preconfig)
+        self.check_config("init_run_main", core_config, preconfig)
+
+    def test_init_main(self):
+        preconfig = {}
+        code = ('import _testinternalcapi, json; '
+                'print(json.dumps(_testinternalcapi.get_configs()))')
+        core_config = {
+            'argv': ['-c', 'arg2'],
+            'program': 'python3',
+            'program_name': './python3',
+            'run_command': code + '\n',
+            '_init_main': 0,
+        }
+        self.check_config("init_main", core_config, preconfig,
+                          stderr="Run Python code before _Py_InitializeMain")
+
+    def test_init_dont_parse_argv(self):
+        core_config = {
+            'argv': ['-v', '-c', 'arg1', '-W', 'arg2'],
+            'parse_argv': 0,
+            'program': 'program',
+        }
+        self.check_config("init_dont_parse_argv", core_config, {})
 
 
 if __name__ == "__main__":
